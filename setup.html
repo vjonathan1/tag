@@ -24,24 +24,24 @@
       <section class="card">
         <span class="eyebrow">Step 4 of the README</span>
         <h1>Initialize the operation</h1>
-        <p>This creates one login per agent, writes the roster, starts the clock, and generates each agent's private link.
-           Run it <b>once</b>. Links are shown only on this screen, so save them before leaving.</p>
+        <p>This creates one login per agent with the password you set below, writes the roster, and starts the clock.
+           Run it <b>once</b>. Everyone uses the same site link and signs in by picking their name and typing their password.</p>
         <div id="unconfigured" class="warnbox" hidden>Firebase isn't configured. Fill in <code>js/config.js</code> first.</div>
-        <form id="setup-form">
-          <label for="pw">Operation passphrase (shared with the squad)</label>
-          <input class="field" id="pw" type="password" minlength="4" required autocomplete="new-password">
-          <label for="pw2">Confirm passphrase</label>
-          <input class="field" id="pw2" type="password" minlength="4" required autocomplete="new-password">
+        <form id="setup-form" autocomplete="off">
+          <div class="card-head" style="margin:18px 0 0"><h2>Agent passwords</h2>
+            <button class="btn btn-sm" type="button" id="gen-all">Generate all</button></div>
+          <p style="margin:6px 0 0;font-size:.9rem">At least 6 characters each, all different. Players can change theirs later from the app.</p>
+          <div id="pw-fields"></div>
           <label for="start">Who is IT at the start?</label>
           <select class="field" id="start"></select>
-          <div class="actions"><button class="btn btn-primary" type="submit">Initialize &amp; generate links</button></div>
+          <div class="actions"><button class="btn btn-primary" type="submit">Initialize operation</button></div>
         </form>
         <div class="log" id="log" aria-live="polite"></div>
       </section>
       <section class="card" id="links" hidden>
-        <div class="card-head"><h2>Agent links</h2><button class="btn btn-sm" id="download">Download .txt</button></div>
-        <div class="warnbox">Send each agent <b>only their own link</b> by private message, plus the passphrase
-          (ideally through a different channel). Anyone with a link <i>and</i> the passphrase can act as that agent.</div>
+        <div class="card-head"><h2>Send to each agent</h2><button class="btn btn-sm" id="download">Download .txt</button></div>
+        <div class="warnbox">Send each agent <b>only their own message</b>, privately. The site link is the same for everyone;
+          the password is what proves who they are. Passwords aren't stored anywhere you can read later, so save this list now.</div>
         <div id="link-list"></div>
       </section>
     </main>
