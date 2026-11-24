@@ -1,0 +1,34 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+
+    "logins": {
+      ".read": true,
+      "$pid": {
+        ".write": "auth != null && root.child('meta/admins').child(auth.uid).val() === true",
+        ".validate": "newData.isString() && newData.val().beginsWith($pid + '.')"
+      }
+    },
+
+    "meta": {
+      ".read": "auth != null && data.child('uids').child(auth.uid).exists()",
+      ".write": "auth != null && newData.exists() && ((!data.exists() && newData.child('uids').child(auth.uid).exists()) || data.child('admins').child(auth.uid).val() === true)"
+    },
+
+    "game": {
+      ".read": "auth != null && root.child('meta/uids').child(auth.uid).exists()",
+      ".write": "auth != null && newData.parent().child('meta/uids').child(auth.uid).exists() && newData.hasChild('start') && (data.exists() || !root.child('meta').exists())",
+
+      "start": {
+        "it": { ".validate": "!data.exists() || newData.val() === data.val()" },
+        "at": { ".validate": "!data.exists() || newData.val() === data.val()" }
+      },
+      "log": {
+        "$i": {
+          ".validate": "!data.exists() || (newData.child('from').val() === data.child('from').val() && newData.child('to').val() === data.child('to').val() && newData.child('at').val() === data.child('at').val())"
+        }
+      }
+    }
+  }
+}
