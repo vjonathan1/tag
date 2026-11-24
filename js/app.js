@@ -53,8 +53,8 @@ const playerIds = () => Object.entries(S.meta?.players || {})
 function clockHTML(ms) {
   const s = Math.max(0, Math.floor(ms / 1000));
   const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
-  const sep = '<span class="sep">:</span>';
-  return `${d ? `${d}<span class="u">d</span>` : ""}${pad(h)}${sep}${pad(m)}${sep}${pad(s % 60)}`;
+  const u = (x) => `<span class="u">${x}</span>`;
+  return `${d ? `${d}${u("d")}` : ""}${pad(h)}${u("h")}${pad(m)}${u("m")}${pad(s % 60)}${u("s")}`;
 }
 function fmtDur(ms) {
   const s = Math.max(0, Math.floor(ms / 1000));
