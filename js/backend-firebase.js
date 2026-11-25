@@ -81,6 +81,9 @@ export function createBackend() {
     },
     async getLocationKey(pid) { return (await get(ref(db, `locationKeys/${pid}`))).val(); },
     setLocationKey(pid, key) { return set(ref(db, `locationKeys/${pid}`), key); },
+    // Admin-only (enforced by the rules).
+    setSetting(key, value) { return set(ref(db, `meta/settings/${key}`), value); },
+    clearLocations(ids) { return update(ref(db), Object.fromEntries(ids.map((id) => [`locations/${id}`, null]))); },
     stopSharing(pid) { return update(ref(db), { [`locationKeys/${pid}`]: null, [`locations/${pid}`]: null }); },
     pingEndpoint(pid) { return `${firebaseConfig.databaseURL.replace(/\/+$/, "")}/locations/${pid}.json`; },
     // Sends exactly what the Shortcut sends — used by the in-app "test from this device" button.

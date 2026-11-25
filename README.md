@@ -62,6 +62,8 @@ Admins see a **Command console** panel at the bottom of the main screen. It's co
 |---|---|
 | **Reset a password** | Pick a player, type or generate a new password. They're signed out on every device and must sign in with the new one. **Copy message** gives you a ready-to-send note. |
 | **Pending tag** | **Force confirm** or **Void** a stuck pending tag or audit, skipping the normal accept/vote process. |
+| **Field map** | Turn the map on or off for everyone. While off, it's hidden and new check-ins are rejected. **Clear all check-ins** deletes everyone's stored location. |
+| **Log a past tag** | Add a tag that happened but wasn't entered: pick who tagged whom and when. It's checked against the history (the tagger must have been IT then), so log older tags first. Shown as "Logged by admin". **Game start** lets you change who was IT first and when, e.g. to backfill tags from before the app existed. |
 | **Undo last tag** | Removes the most recent confirmed tag. IT goes back to the previous person, and their timer continues from when they were originally tagged. Undone tags are kept in `game/undone` for the record. |
 
 **How the reset works:** a web page can't change someone else's Firebase password (that needs a paid server plan). Instead, the app creates a fresh login for that player with the new password, points the roster at it, and removes the old login from the roster. The old account then has no access. It still shows in Firebase → Authentication → Users, and you can delete it there to tidy up, but you don't have to.
@@ -104,7 +106,7 @@ Notes:
 
 ## Location check-ins (opt-in)
 
-The **Field map** on the main screen shows each sharing player's latest hourly check-in. Players turn it on themselves (footer → **Location sharing**). Their phone posts the location using an Apple Shortcut or an Android automation app. Only the latest point is kept. Full setup and privacy notes: [LOCATION-SHARING.md](LOCATION-SHARING.md).
+The **Field map** on the main screen shows each sharing player's latest check-in, sent about every 12 hours. Markers are teal, or red for the current tagger. The ring around each marker and the "last updated" time are teal when on schedule, amber when overdue (12–24h), and grey when stale (over 24h). Players turn it on themselves (footer → **Location**). Their phone posts the location using an Apple Shortcut or an Android automation app. Only the latest point is kept. Full setup and privacy notes: [LOCATION-SHARING.md](LOCATION-SHARING.md).
 
 ## Game rules in the app
 

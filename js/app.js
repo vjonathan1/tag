@@ -19,7 +19,7 @@ import { PLAYERS, RESPONSE_TIMEOUT_MIN, isConfigured } from "./config.js";
 
 // Shown in the footer so you can check which version a device is running.
 // Keep in sync with the ?v= numbers in index.html.
-const APP_VERSION = 7;
+const APP_VERSION = 10;
 const DEMO = new URLSearchParams(location.search).has("demo");
 const LS = DEMO ? "tagops-demo-" : "tagops-";
 const TIMEOUT = RESPONSE_TIMEOUT_MIN * 60_000;
@@ -37,7 +37,7 @@ const S = {
   dismissed: new Set(), alerted: new Set(), escalating: new Set(), primed: false, modalKey: null,
   // Location sharing
   locs: {}, locSub: false, locModal: false, locKey: undefined, locMsg: "", locBusy: false,
-  map: null, mapEl: null, markers: {}, fitted: false, leaflet: null,
+  map: null, mapEl: null, markers: {}, fitSig: null, leaflet: null,
 };
 
 // ── Small utilities ──────────────────────────────────────────
@@ -52,7 +52,12 @@ const toArr = (v) => (Array.isArray(v) ? v.filter(Boolean) : v ? Object.keys(v).
 const pkey = (p) => `${p.from}>${p.to}@${p.at}`;
 const rosterName = (id) => PLAYERS.find((p) => p.id === id)?.name || id;
 const name = (id) => S.meta?.players?.[id]?.name || rosterName(id);
-const initials = (id) => name(id).split(/\s+/).map((w) => w[0]).join("").slice(0, 2).toUpperCase();
+// "Rece Stewart" → "RS"; a one-word name uses its first two letters ("Rece" → "RE") so names that
+// share a first letter (Rece / Ryan) stay distinguishable.
+const initials = (id) => {
+  const words = name(id).trim().split(/\s+/);
+  return (words.length > 1 ? words.map((w) => w[0]).join("") : words[0]).slice(0, 2).toUpperCase();
+};
 const playerIds = () => Object.entries(S.meta?.players || {})
   .sort((a, b) => (a[1].order ?? 0) - (b[1].order ?? 0)).map(([id]) => id);
 
@@ -166,6 +171,18 @@ const ops = {
   // ── Admin overrides ──
   adminConfirm: (key) => (g) => { if (!g?.pending || pkey(g.pending) !== key) return; return finalize(g, "admin"); },
   adminVoid: (key) => (g) => { if (!g?.pending || pkey(g.pending) !== key) return; return voidTag(g); },
+  adminLog: (entry) => (g) => {
+    if (!g?.start || g.pending) return;
+    const { log } = withInserted(toArr(g.log), entry);
+    if (checkChain(g.start, log)) return;
+    g.log = log;
+    return g;
+  },
+  adminStart: (start) => (g) => {
+    if (!g?.start || g.pending || checkChain(start, toArr(g.log))) return;
+    g.start = start;
+    return g;
+  },
   adminUndo: (key) => (g) => {
     const log = toArr(g?.log);
     if (g?.pending || !log.length || pkey(log[log.length - 1]) !== key) return;
@@ -176,15 +193,19 @@ const ops = {
   },
 };
 const isAdmin = () => S.meta?.admins?.[S.user?.uid] === true;
+// Admin switch (meta/settings/mapEnabled). On unless an admin turned it off.
+const mapEnabled = () => S.meta?.settings?.mapEnabled !== false;
 async function run(op) {
   if (S.busy) return;
   S.busy = true;
   try {
     const ok = await S.backend.transact(op);
     if (!ok) toast("Status changed before your action went through — refreshed.");
+    return ok;
   } catch (e) {
     console.error(e);
     toast(`Transmission failed (${e.code || e.message}).`);
+    return false;
   } finally { S.busy = false; }
 }
 
@@ -205,7 +226,7 @@ function unsubscribeAll() { S.subs.forEach((u) => { try { u(); } catch {} }); S.
 function onAuth(user) {
   unsubscribeAll();
   S.user = user; S.meta = null; S.game = null; S.me = null; S.primed = false;
-  S.locs = {}; S.locSub = false; S.locModal = false; S.fitted = false;
+  S.locs = {}; S.locSub = false; S.locModal = false; S.fitSig = null;
   if (!user) return show("login");
   if (user.agent) { S.creds.agent = user.agent; store.set("agent", user.agent); }
   show("loading");
@@ -329,12 +350,12 @@ function render() {
     case "login": {
       const known = PLAYERS.some((p) => p.id === S.creds.agent);
       $app.innerHTML = gate(ICON_LOCK, "Secure channel · Identity check",
-        known ? `Welcome back, Agent ${esc(rosterName(S.creds.agent).split(" ").slice(-1)[0])}` : "Identify yourself, agent",
+        known ? `Welcome back, Agent ${esc(rosterName(S.creds.agent).split(" ")[0])}` : "Identify yourself, agent",
         `<p>Sign in with your personal password. This device will remember you after this.</p>
          <form id="login-form" autocomplete="on">
            <select class="field" id="agent" name="username" autocomplete="username" required aria-label="Your name">
              <option value="" ${known ? "" : "selected"} disabled>Who are you?</option>
-             ${PLAYERS.map((p) => `<option value="${esc(p.id)}" ${p.id === S.creds.agent ? "selected" : ""}>${esc(p.name)}</option>`).join("")}
+             ${PLAYERS.map((p) => `<option value="${esc(p.id)}" ${p.id === S.creds.agent ? "selected" : ""}>${esc(p.name.split(" ")[0])}</option>`).join("")}
            </select>
            <input class="field" id="pass" type="password" name="password" autocomplete="current-password"
                   placeholder="${DEMO ? "Demo: any password" : "Password"}" required aria-label="Password">
@@ -387,9 +408,11 @@ function renderMain() {
 
   const targets = isIt && !p ? targetsHTML(d) : "";
 
-  // Keep anything typed into the admin form across live re-renders.
-  const $rf = document.getElementById("reset-form");
-  const keep = $rf ? { pid: $rf.pid.value, pw: $rf.pw.value, open: document.getElementById("admin-console")?.open } : null;
+  // Keep anything typed into the admin console (and which sections are open) across live re-renders.
+  const keepFields = {}, keepOpen = [];
+  document.querySelectorAll("#admin-console form").forEach((f) =>
+    [...f.elements].forEach((el) => { if (el.name) keepFields[`${f.id}.${el.name}`] = el.value; }));
+  document.querySelectorAll("#admin-console, #admin-console details").forEach((el) => keepOpen.push(el.open));
 
   $app.innerHTML = `
     <header class="topbar">
@@ -409,36 +432,51 @@ function renderMain() {
           <p class="lb-note">Includes every stint as IT. The live stint keeps counting.</p>
         </section>
       </div>
+      ${mapEnabled() ? `
       <section class="card map-card">
-        <div class="card-head"><h2>Field map</h2><span class="mono dim">Hourly check-ins</span></div>
+        <div class="card-head"><h2>Field map</h2><button class="btn btn-sm" data-act="fit-map">Fit all</button></div>
         <div id="map-slot" class="map-slot"></div>
         <ul class="list loc-list" id="loc-list">${locListHTML(d)}</ul>
-        <p class="lb-note">Only players who turned on <b>Location sharing</b> appear. Each shows their latest check-in only.</p>
-      </section>
+        <p class="lb-note map-legend">
+          <span><i class="dot-fresh"></i>Under ${CHECKIN_HOURS}h</span>
+          <span><i class="dot-late"></i>${CHECKIN_HOURS}–${CHECKIN_HOURS * 2}h (overdue)</span>
+          <span><i class="dot-stale"></i>Over ${CHECKIN_HOURS * 2}h</span>
+        </p>
+        <p class="lb-note">Check-ins arrive about every ${CHECKIN_HOURS} hours from players who turned on <b>Location</b> sharing. Only the latest one is kept.</p>
+      </section>` : ""}
       ${isAdmin() ? adminHTML(d, p) : ""}
       <footer class="foot">
         <span>TAG//OPS v${APP_VERSION} · ${playerIds().length} agents · ${d.log.length} confirmed tags</span>
         <span class="foot-actions">
           ${"Notification" in window && Notification.permission === "default"
-            ? '<button class="btn-link" data-act="alerts">Enable alerts</button>' : ""}
-          <button class="btn-link" data-act="loc-open">Location sharing</button>
-          <button class="btn-link" data-act="change-pw">Change password</button>
-          <button class="btn-link" data-act="disconnect">Sign out</button>
+            ? '<button class="btn-link" data-act="alerts" title="Enable alerts">Alerts</button>' : ""}
+          <button class="btn-link" data-act="loc-open" title="Location sharing">Location</button>
+          <button class="btn-link" data-act="change-pw" title="Change password">Password</button>
+          <button class="btn-link" data-act="disconnect" title="Sign out on this device">Sign out</button>
         </span>
       </footer>
     </main>`;
 
-  const $nf = document.getElementById("reset-form");
-  if ($nf && keep) {
-    if (keep.pid) $nf.pid.value = keep.pid;
-    $nf.pw.value = keep.pw;
-    if (keep.open !== undefined) document.getElementById("admin-console").open = keep.open;
-  }
+  document.querySelectorAll("#admin-console form").forEach((f) =>
+    [...f.elements].forEach((el) => { const k = `${f.id}.${el.name}`; if (el.name && k in keepFields) el.value = keepFields[k]; }));
+  document.querySelectorAll("#admin-console, #admin-console details").forEach((el, i) => { if (i < keepOpen.length) el.open = keepOpen[i] || (i === 0 && !!S.lastReset); });
   mountMap();
 }
 
 // ── Field map (Leaflet, loaded on demand) ───────────────────
-const STALE_MS = 3 * 3600e3; // check-ins older than this are dimmed
+// Check-ins are expected about every 12 hours.
+//   under 12h → fresh (teal) · 12–24h → overdue (amber) · over 24h → stale (grey)
+const CHECKIN_HOURS = 12;
+const LATE_MS = CHECKIN_HOURS * 3600e3, STALE_MS = 2 * LATE_MS;
+const freshness = (at) => { const age = now() - at; return age > STALE_MS ? "stale" : age > LATE_MS ? "late" : "fresh"; };
+// Compact age for the map: "now", "23m", "4h", "2d".
+function agoShort(ts) {
+  const s = Math.max(0, Math.floor((now() - ts) / 1000));
+  if (s < 60) return "now";
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h`;
+  return `${Math.floor(s / 86400)}d`;
+}
 const LEAFLET = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/";
 
 function loadLeaflet() {
@@ -455,11 +493,11 @@ function loadLeaflet() {
 
 function mountMap() {
   const slot = document.getElementById("map-slot");
-  if (!slot) return;
+  if (!slot) { S.fitSig = null; return; } // map hidden: refit when it comes back
   // The map element is created once and moved into each re-render, so Leaflet keeps its state.
   if (!S.mapEl) { S.mapEl = document.createElement("div"); S.mapEl.className = "map"; }
   slot.appendChild(S.mapEl);
-  if (S.map) { S.map.invalidateSize(); return; }
+  if (S.map) { S.map.invalidateSize(); updateMap(); return; }
   loadLeaflet().then((L) => {
     if (S.map) return;
     S.map = L.map(S.mapEl, { zoomControl: true, attributionControl: true, worldCopyJump: true }).setView([39.5, -98.35], 4);
@@ -480,12 +518,11 @@ function locListHTML(d) {
   const it = d?.it;
   return playerIds().map((id) => {
     const p = S.locs[id];
-    const stale = p && now() - p.at > STALE_MS;
     return `
-      <li class="loc-row ${p ? "" : "off"} ${stale ? "stale" : ""}">
+      <li class="loc-row ${p ? freshness(p.at) : "off"}">
         <span class="avatar sm ${id === it ? "hot" : ""}">${esc(initials(id))}</span>
         <span class="loc-name">${esc(name(id))}${id === S.me ? " <i>You</i>" : ""}</span>
-        <span class="loc-time mono">${p ? `<span data-ago="${p.at}">${ago(p.at)}</span>` : "Not sharing"}</span>
+        <span class="loc-time mono" ${p ? `title="Last check-in ${esc(fmtWhen(p.at))}"` : ""}>${p ? agoShort(p.at) : "Off"}</span>
         ${p ? `<button class="btn btn-sm" data-act="locate" data-id="${esc(id)}">Locate</button>` : ""}
       </li>`;
   }).join("");
@@ -496,23 +533,35 @@ function updateMap() {
   const d = derive(S.game);
   const list = document.getElementById("loc-list");
   if (list) list.innerHTML = locListHTML(d);
+  const adminBlock = document.getElementById("admin-map-block");
+  if (adminBlock) adminBlock.outerHTML = adminMapHTML(); // keep the stored check-in count current
   const L = window.L;
   if (!S.map || !L) return;
   const pts = [];
   for (const id of playerIds()) {
     const p = S.locs[id];
     if (!p) { if (S.markers[id]) { S.markers[id].remove(); delete S.markers[id]; } continue; }
-    const cls = `pin ${id === d.it ? "it" : ""} ${now() - p.at > STALE_MS ? "stale" : ""}`;
+    const cls = `pin ${freshness(p.at)} ${id === d.it ? "it" : ""}`;
     const icon = L.divIcon({ className: "", html: `<div class="${cls}">${esc(initials(id))}</div>`, iconSize: [34, 34], iconAnchor: [17, 17] });
-    const tip = `${esc(name(id))}${id === d.it ? " · IT" : ""} · ${ago(p.at)}`;
+    const tip = `${esc(name(id))}${id === d.it ? " · IT" : ""} · ${agoShort(p.at)}`;
     if (S.markers[id]) S.markers[id].setLatLng([p.lat, p.lng]).setIcon(icon).setTooltipContent(tip);
     else S.markers[id] = L.marker([p.lat, p.lng], { icon }).bindTooltip(tip, { direction: "top", offset: [0, -16] }).addTo(S.map);
     pts.push([p.lat, p.lng]);
   }
-  if (!S.fitted && pts.length) {
-    S.fitted = true;
-    S.map.fitBounds(pts, { padding: [40, 40], maxZoom: 14 });
-  }
+  // Re-zoom to show everyone whenever the set of check-ins changes (someone new appears,
+  // moves, or stops sharing). "Fit all" does the same on demand after manual panning.
+  const sig = pts.map((p) => p.join(",")).join("|");
+  if (sig !== S.fitSig) { S.fitSig = sig; fitMap(pts); }
+}
+
+function fitMap(pts) {
+  if (!S.map) return;
+  pts = pts || playerIds().map((id) => S.locs[id]).filter(Boolean).map((p) => [p.lat, p.lng]);
+  if (!pts.length) return;
+  S.map.invalidateSize();
+  // One person → close-up of their area; several → the smallest view containing all of them.
+  if (pts.length === 1) S.map.setView(pts[0], 14);
+  else S.map.fitBounds(pts, { padding: [36, 36], maxZoom: 15 });
 }
 
 // ── Location sharing setup ───────────────────────────────────
@@ -552,12 +601,13 @@ function testPing() {
 }
 
 function locModalHTML() {
-  const msg = S.locMsg ? `<p class="loc-msg">${esc(S.locMsg)}</p>` : "";
+  const msg = (mapEnabled() ? "" : '<p class="loc-msg">⚠ An admin has turned the Field map off. Check-ins are paused and will be rejected until it\'s back on.</p>')
+    + (S.locMsg ? `<p class="loc-msg">${esc(S.locMsg)}</p>` : "");
   if (S.locKey === undefined) return `<span class="eyebrow">Location sharing</span><h2>Checking…</h2><div class="loader" style="margin-top:16px"></div>`;
   if (!S.locKey) {
     return `<span class="eyebrow">Location sharing · Off</span>
       <h2>Share your location with the squad?</h2>
-      <p>Your phone sends one check-in per hour from an automation you set up yourself. Only the 7 signed-in players can see it, and only your <b>latest</b> check-in is kept, with no history.</p>
+      <p>Your phone sends a check-in about every ${CHECKIN_HOURS} hours from an automation you set up yourself. Only the 7 signed-in players can see it, and only your <b>latest</b> check-in is kept, with no history.</p>
       <p style="margin-top:10px">You can stop anytime here, or by deleting the automation on your phone.</p>
       ${msg}
       <div class="actions"><button class="btn btn-ghost" data-act="loc-close">Not now</button>
@@ -621,8 +671,116 @@ function adminHTML(d, p) {
               <p class="hint">IT goes back to ${esc(name(last.from))} and their timer resumes from the original time.</p>`
             : `<p class="dim">${p ? "Resolve the pending tag first." : "No tags to undo."}</p>`}
         </div>
+        ${adminMapHTML()}
+        ${adminLogHTML(d, p)}
       </div>
     </details>`;
+}
+
+function adminMapHTML() {
+  const on = mapEnabled();
+  const count = Object.values(S.locs).filter(Boolean).length;
+  return `
+    <div class="admin-block" id="admin-map-block">
+      <h3>Field map</h3>
+      <p>${on ? "<b>On</b>: visible to all players." : "<b>Off</b>: hidden for everyone, and new check-ins are rejected."}
+        ${count} stored check-in${count === 1 ? "" : "s"}.</p>
+      <div class="actions">
+        <button class="btn btn-sm ${on ? "" : "btn-primary"}" data-act="admin-map">${on ? "Turn map off" : "Turn map on"}</button>
+        ${count ? '<button class="btn btn-sm btn-ghost" data-act="admin-clear-locs">Clear all check-ins</button>' : ""}
+      </div>
+    </div>`;
+}
+
+// <input type="datetime-local"> works in local time without seconds.
+const toLocalInput = (ts) => new Date(ts - new Date(ts).getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+const fromLocalInput = (v) => new Date(v).getTime();
+
+function adminLogHTML(d, p) {
+  const ids = playerIds();
+  const opts = (sel) => ids.map((id) => `<option value="${esc(id)}" ${id === sel ? "selected" : ""}>${esc(name(id))}</option>`).join("");
+  const nowMax = toLocalInput(now());
+  return `
+    <div class="admin-block admin-wide">
+      <h3>Log a past tag</h3>
+      ${p ? '<p class="dim">Resolve the pending tag first.</p>' : `
+      <form id="log-form" autocomplete="off" style="display:grid;gap:10px">
+        <div class="log-row">
+          <select class="field" id="lg-from" name="from" data-keep aria-label="Tagger">${opts(d.it)}</select>
+          <span class="dim mono">tagged</span>
+          <select class="field" id="lg-to" name="to" data-keep aria-label="Tagged player">${opts(ids.find((i) => i !== d.it))}</select>
+        </div>
+        <input class="field" type="datetime-local" id="lg-at" name="at" data-keep required max="${nowMax}" aria-label="When it happened">
+        <button class="btn btn-primary" type="submit">Add to history</button>
+        <p class="err" role="alert"></p>
+      </form>
+      <p class="hint">The tagger must have been IT at that moment. To backfill several tags, enter them oldest first.
+        Entries are marked "Logged by admin" in the history.</p>
+      <details class="subdetails">
+        <summary>Game start (who was IT first, and when)</summary>
+        <form id="start-form" autocomplete="off" style="display:grid;gap:10px;margin-top:10px">
+          <select class="field" id="st-it" name="it" data-keep aria-label="Starting IT">${opts(S.game.start.it)}</select>
+          <input class="field" type="datetime-local" id="st-at" name="at" data-keep required max="${nowMax}" value="${toLocalInput(S.game.start.at)}" aria-label="Start time">
+          <button class="btn" type="submit">Save game start</button>
+          <p class="err" role="alert"></p>
+        </form>
+        <p class="hint">Move the start earlier if you're logging tags from before the app was set up.</p>
+      </details>`}
+    </div>`;
+}
+
+// Checks that a tag history makes sense: times strictly increase, nobody tags themselves,
+// each tagger was IT at that moment, and nothing is in the future. Returns null or { index, msg }.
+function checkChain(start, log) {
+  if (start.at > now() + 60000) return { index: -1, msg: "The game start can't be in the future." };
+  let it = start.it, prev = start.at;
+  for (let i = 0; i < log.length; i++) {
+    const t = log[i];
+    if (t.from === t.to) return { index: i, msg: "A player can't tag themselves." };
+    if (t.at <= prev) return { index: i, msg: `${fmtWhen(t.at)} isn't after ${i ? "the previous tag" : "the game start"} (${fmtWhen(prev)}).${i ? "" : " To log older tags, move the Game start earlier first (below)."}` };
+    if (t.from !== it) return { index: i, msg: `At ${fmtWhen(t.at)}, ${name(it)} was IT, not ${name(t.from)}.` };
+    if (t.at > now() + 60000) return { index: i, msg: "That time is in the future." };
+    it = t.to; prev = t.at;
+  }
+  return null;
+}
+function withInserted(log, entry) {
+  const out = [...log];
+  let i = out.findIndex((t) => t.at > entry.at);
+  if (i < 0) i = out.length;
+  out.splice(i, 0, entry);
+  return { log: out, index: i };
+}
+function explainLogError(err, insertedAt, log) {
+  if (!err) return null;
+  if (err.index > insertedAt) {
+    const nx = log[err.index];
+    return `That conflicts with the existing history: the next recorded tag (${name(nx.from)} → ${name(nx.to)}, ${fmtWhen(nx.at)}) needs ${name(nx.from)} to be IT at that point. Log tags in order, or undo later ones first.`;
+  }
+  return err.msg;
+}
+
+function submitLog(form) {
+  const $err = form.querySelector(".err");
+  if (!form.at.value) { $err.textContent = "Pick when it happened."; return; }
+  const entry = { from: form.from.value, to: form.to.value, at: fromLocalInput(form.at.value), confirmedAt: now(), via: "manual", by: S.me };
+  const { log, index } = withInserted(toArr(S.game.log), entry);
+  const msg = explainLogError(checkChain(S.game.start, log), index, log);
+  if (msg) { $err.textContent = msg; return; }
+  if (!confirm(`Add to history: ${name(entry.from)} tagged ${name(entry.to)} at ${fmtWhen(entry.at)}?`)) return;
+  $err.textContent = "";
+  form.at.value = "";
+  run(ops.adminLog(entry)).then((ok) => ok && toast("Tag added to history."));
+}
+
+function submitStart(form) {
+  const $err = form.querySelector(".err");
+  const start = { it: form.it.value, at: fromLocalInput(form.at.value) };
+  const err = checkChain(start, toArr(S.game.log));
+  if (err) { $err.textContent = err.index < 0 ? err.msg : `That doesn't fit the recorded tags: ${err.msg}`; return; }
+  if (!confirm(`Set the game start to ${name(start.it)} at ${fmtWhen(start.at)}? Everyone's totals will be recalculated.`)) return;
+  $err.textContent = "";
+  run(ops.adminStart(start)).then((ok) => ok && toast("Game start updated."));
 }
 
 function targetsHTML(d) {
@@ -696,7 +854,7 @@ function pendingHTML(p) {
 function historyHTML(d) {
   const recent = d.log.slice(-3).reverse();
   if (!recent.length) return `<li class="empty">No tags on record yet. ${esc(name(S.game.start.it))} started as IT.</li>`;
-  const label = { audit: ["Audit verified", "badge-audit"], conceded: ["Conceded", "badge-audit"], admin: ["Admin confirmed", "badge-audit"] };
+  const label = { audit: ["Audit verified", "badge-audit"], conceded: ["Conceded", "badge-audit"], admin: ["Admin confirmed", "badge-audit"], manual: ["Logged by admin", "badge-audit"] };
   return recent.map((t) => {
     const [txt, cls] = label[t.via] || ["Confirmed", ""];
     return `
@@ -880,6 +1038,21 @@ document.addEventListener("click", (e) => {
       navigator.clipboard.writeText(txt).then(() => toast("Copied."), () => toast("Couldn't copy. Select the text manually."));
       break;
     }
+    case "fit-map": fitMap(); break;
+    case "admin-map": {
+      const turnOn = !mapEnabled();
+      if (!confirm(turnOn ? "Turn the Field map on for everyone?" : "Turn the Field map off? It disappears for everyone and new check-ins are rejected until you turn it back on.")) break;
+      S.backend.setSetting("mapEnabled", turnOn)
+        .then(() => toast(turnOn ? "Field map is on." : "Field map is off."))
+        .catch((err) => toast(`Couldn't change the setting (${err.code || err.message}).`));
+      break;
+    }
+    case "admin-clear-locs":
+      if (!confirm("Delete everyone's stored check-in? Players who are still sharing will reappear at their next check-in (if the map is on).")) break;
+      S.backend.clearLocations(playerIds())
+        .then(() => toast("All check-ins cleared."))
+        .catch((err) => toast(`Couldn't clear check-ins (${err.code || err.message}).`));
+      break;
     case "locate": {
       const p = S.locs[el.dataset.id];
       if (p && S.map) { S.map.setView([p.lat, p.lng], 15); S.markers[el.dataset.id]?.openTooltip(); S.mapEl.scrollIntoView({ behavior: "smooth", block: "center" }); }
@@ -914,6 +1087,8 @@ document.addEventListener("click", (e) => {
 document.addEventListener("submit", (e) => {
   if (e.target.id === "pw-form") { e.preventDefault(); changePassword(e.target); }
   if (e.target.id === "reset-form") { e.preventDefault(); adminReset(e.target); }
+  if (e.target.id === "log-form") { e.preventDefault(); submitLog(e.target); }
+  if (e.target.id === "start-form") { e.preventDefault(); submitStart(e.target); }
 });
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && (S.confirm || S.pwModal || S.locModal)) { S.confirm = null; S.pwModal = false; S.locModal = false; renderModal(); }
@@ -928,6 +1103,8 @@ function tick() {
   const lb = document.getElementById("lb-body");
   if (lb) lb.innerHTML = leaderboardHTML(d);
   document.querySelectorAll("[data-ago]").forEach((el) => { el.textContent = ago(+el.dataset.ago); });
+  // Refresh check-in ages and colors once a minute (they only change at minute granularity).
+  if (!S.lastLocRefresh || Date.now() - S.lastLocRefresh > 60000) { S.lastLocRefresh = Date.now(); updateMap(); }
   document.querySelectorAll("[data-countdown]").forEach((el) => { el.textContent = countdown(+el.dataset.countdown); });
 
   // Any open client can push an unanswered tag into audit once the response window passes.

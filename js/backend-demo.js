@@ -28,7 +28,7 @@ export function createBackend() {
   };
   const load = () => { try { const s = localStorage.getItem(KEY); if (s) return JSON.parse(s); } catch {} return seed(); };
   let game = load();
-  const gameCbs = new Set();
+  const gameCbs = new Set(), metaCbs = new Set();
   let authCb = null;
   const save = () => { try { localStorage.setItem(KEY, JSON.stringify(game)); } catch {} };
   const emit = () => gameCbs.forEach((cb) => cb(structuredClone(game)));
@@ -42,7 +42,7 @@ export function createBackend() {
     const at = (lat, lng, ago) => ({ lat, lng, at: n - ago * M, src: "demo" });
     return {
       keys: { deuce: "demo-key-deuce-000000000", eli: "demo-key-eli-00000000000", oscar: "demo-key-oscar-000000000", ryan: "demo-key-ryan-0000000000", rece: "demo-key-rece-0000000000" },
-      locs: { deuce: at(33.7756, -84.3963, 22), eli: at(33.7490, -84.3880, 48), oscar: at(33.8463, -84.3621, 75), ryan: at(33.7710, -84.3653, 12), rece: at(33.7001, -84.4195, 260) },
+      locs: { deuce: at(33.7756, -84.3963, 22), eli: at(33.7490, -84.3880, 48), oscar: at(33.8463, -84.3621, 30 * 60), ryan: at(33.7710, -84.3653, 12), rece: at(33.7001, -84.4195, 14 * 60) },
     };
   };
   const loadLocs = () => { try { const s = localStorage.getItem(LOCS); if (s) return JSON.parse(s); } catch {} return seedLocs(); };
@@ -66,7 +66,12 @@ export function createBackend() {
     async changePassword() {},
     async resetPassword() {},
     async signOut() { try { sessionStorage.removeItem(SESSION); } catch {} authCb?.(null); },
-    watchMeta(cb) { setTimeout(() => cb(structuredClone(meta)), 0); return () => {}; },
+    watchMeta(cb) { metaCbs.add(cb); setTimeout(() => cb(structuredClone(meta)), 0); return () => metaCbs.delete(cb); },
+    async setSetting(key, value) {
+      meta.settings = { ...(meta.settings || {}), [key]: value };
+      metaCbs.forEach((cb) => cb(structuredClone(meta)));
+    },
+    async clearLocations() { L.locs = {}; saveLocs(); emitLocs(); },
     watchGame(cb) { gameCbs.add(cb); setTimeout(() => cb(structuredClone(game)), 0); return () => gameCbs.delete(cb); },
     async transact(fn) {
       const next = fn(structuredClone(game));
@@ -89,6 +94,7 @@ export function createBackend() {
     async stopSharing(pid) { delete L.keys[pid]; delete L.locs[pid]; saveLocs(); emitLocs(); },
     pingEndpoint(pid) { return `https://YOUR-PROJECT-default-rtdb.firebaseio.com/locations/${pid}.json`; },
     async sendPing(pid, key, lat, lng, src) {
+      if (meta.settings?.mapEnabled === false) throw new Error("HTTP 401 Permission denied (field map is off)");
       if (!key || L.keys[pid] !== key) throw new Error("HTTP 401 Permission denied (key mismatch)");
       L.locs[pid] = { lat, lng, at: Date.now(), src }; saveLocs(); emitLocs();
     },

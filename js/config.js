@@ -18,16 +18,18 @@ export const firebaseConfig = {
   appId: "1:791101315216:web:e542a41ee8e257c4dbe015"
 };
 
-// 2) The roster. `id` is used in links and logins — keep it lowercase, no spaces.
-//    Changing this after running setup.html requires re-running setup.
+// 2) The roster. `id` is used in logins — keep it lowercase, no spaces.
+//    This file is PUBLIC (anyone can open it on GitHub Pages), so it holds first names only;
+//    they're what the login picker shows. Full names live in the database (meta/players),
+//    which only signed-in players can read. Changing ids after running setup.html requires re-running setup.
 export const PLAYERS = [
-  { id: "deuce", name: "Deuce Miles" },
-  { id: "eli", name: "Eli Chambers" },
-  { id: "jacob", name: "Jacob Edwards" },
-  { id: "oscar", name: "Oscar Hultz" },
-  { id: "rece", name: "Rece Stewart" },
-  { id: "ryan", name: "Ryan Kampakis" },
-  { id: "jonny", name: "Jonny Varghese" },
+  { id: "deuce", name: "Deuce" },
+  { id: "eli", name: "Eli" },
+  { id: "jacob", name: "Jacob" },
+  { id: "oscar", name: "Oscar" },
+  { id: "rece", name: "Rece" },
+  { id: "ryan", name: "Ryan" },
+  { id: "jonny", name: "Jonny" },
 ];
 
 // 3) Minutes a tagged player has to accept before the tag automatically goes to a squad audit.

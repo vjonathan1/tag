@@ -1,13 +1,21 @@
 # TAG//OPS location check-ins
 
-Each player's phone posts its location to the game roughly once an hour. The **Field map** on the main screen shows everyone's latest check-in.
+Each player's phone posts its location to the game about **every 12 hours**. The **Field map** on the main screen shows everyone's latest check-in. Each marker's fill shows the player's role (teal for players, red for the current tagger). Its outer ring and the "last updated" time in the list are color-coded by age:
+
+| Color | Age of last check-in |
+|---|---|
+| Teal | under 12 hours (on schedule) |
+| Amber | 12–24 hours (overdue: a check-in was missed) |
+| Grey | over 24 hours (stale) |
+
+Ages show in short form: `now`, `23m`, `4h`, `2d`.
 
 Browsers can't track location in the background, so the phone's own automation tool does the posting:
 
 | Platform | Tool | Trigger |
 |---|---|---|
-| iPhone / iPad | **Shortcuts** app (built in) | One "Time of Day" automation per hour you want covered |
-| Android | An automation app such as **MacroDroid**, **Tasker**, or **HTTP Shortcuts** | A true "every 60 minutes" timer *(guide to come)* |
+| iPhone / iPad | **Shortcuts** app (built in) | Two "Time of Day" automations, 12 hours apart |
+| Android | An automation app such as **MacroDroid**, **Tasker**, or **HTTP Shortcuts** | An "every 12 hours" timer *(guide to come)* |
 
 Both send the same single web request, so the game doesn't care which one a player uses.
 
@@ -66,16 +74,18 @@ The database rules accept the write only if `k` matches that player's key. `{".s
 - `Invalid data; couldn't parse JSON`: a quote or brace got deleted, or Latitude/Longitude didn't come through as numbers. Re-paste the body and redo the two variables.
 - Nothing happens: check **Settings → Privacy & Security → Location Services → Shortcuts** is not set to *Never*.
 
-### Part B: make it run every hour
+### Part B: make it run every 12 hours
 
-The Shortcuts app's time trigger runs once a day, not every hour, so you make one automation per hour you want covered. For testing, set up **2–3**; add the rest once it's proven.
+The Shortcuts app's time trigger runs once a day, so you make **two** automations 12 hours apart.
 
 1. In Shortcuts, open the **Automation** tab and tap **+** (or **New Automation**).
-   On iPad, if there's no Automation tab, your iPadOS version doesn't support personal automations. Test the Shortcut by hand with ▶, and use an iPhone for the hourly part.
-2. Choose **Time of Day**, set the time (e.g. **9:00 AM**), and set **Repeat** to **Daily**.
-3. Choose **Run Immediately** (not "Run After Confirmation"). Turn **Notify When Run** off if you don't want a banner each hour.
+   On iPad, if there's no Automation tab, your iPadOS version doesn't support personal automations. Test the Shortcut by hand with ▶, and use an iPhone for the scheduled part.
+2. Choose **Time of Day**, set the time (e.g. **8:00 AM**), and set **Repeat** to **Daily**.
+3. Choose **Run Immediately** (not "Run After Confirmation"). Turn **Notify When Run** off if you don't want a banner each time.
 4. Tap **Next**, then pick **TAG Check-in**. Done.
-5. Repeat for 10:00, 11:00, and so on. A common choice is every hour from 8 AM to 11 PM (16 automations).
+5. Repeat for **8:00 PM**. Everyone should use the same two times so the map refreshes together.
+
+**Testing tip:** to see it work without waiting 12 hours, add a temporary automation a few minutes from now, check the map after it fires, then delete it.
 
 **Check it worked:** after the next scheduled time passes, look at the Field map. Your check-in time should match. The Shortcuts app doesn't show a history of automation runs, so the map is the easiest check.
 
@@ -83,7 +93,7 @@ The Shortcuts app's time trigger runs once a day, not every hour, so you make on
 - **Low Power Mode** or **Focus modes** can delay or skip it.
 - iOS sometimes waits until the device is unlocked.
 - **Wi-Fi-only iPads** get a rougher location (from Wi-Fi networks rather than GPS), often within a block or two.
-- Treat the times as "about hourly."
+- Treat the times as approximate. A run that's skipped shows up as an amber (overdue) marker until the next one succeeds.
 
 ### Part C: sharing the Shortcut with iPhone friends (later)
 
@@ -97,7 +107,7 @@ Once yours works, you can share it instead of having everyone build from scratch
 ## Android (preview of the plan)
 
 This is the same request with a different app. With **MacroDroid** (free tier is enough for one macro):
-- **Trigger:** Regular Interval → every 60 minutes.
+- **Trigger:** Regular Interval → every 12 hours (or two Day/Time triggers at 8 AM and 8 PM to match iPhones).
 - **Action 1:** Force Location Update, or "Get Location", to capture latitude and longitude into variables.
 - **Action 2:** HTTP Request:
   - **Method:** PUT
@@ -105,7 +115,7 @@ This is the same request with a different app. With **MacroDroid** (free tier is
   - **Body:** the same JSON, with the latitude and longitude variables in place of `LAT` and `LNG`
 - Turn off battery optimization for the app so Android doesn't kill the timer.
 
-Android can run on a true hourly timer, which makes it simpler than iOS. We'll write and test exact steps when you have an Android device to try.
+Android can run on a true repeating timer, which makes it simpler than iOS. We'll write and test exact steps when you have an Android device to try.
 
 ## Troubleshooting quick reference
 
@@ -113,5 +123,6 @@ Android can run on a true hourly timer, which makes it simpler than iOS. We'll w
 |---|---|
 | "Couldn't check your sharing status" in the app | Latest `database.rules.json` not published |
 | Test from this device works, Shortcut doesn't | Key or URL copied wrong, or Method isn't PUT, or Request Body isn't File |
-| Marker greyed out | Last check-in was more than 3 hours ago |
+| Marker ring / time amber | No check-in for 12–24 hours. One scheduled run was likely skipped (Low Power Mode, device off, no signal) |
+| Marker ring / time grey | No check-in for over 24 hours. Check that the automations still exist and are set to Run Immediately |
 | Map area blank, list works | Map tiles or Leaflet couldn't load (offline or blocked network) |
