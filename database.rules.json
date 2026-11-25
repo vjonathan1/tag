@@ -29,6 +29,32 @@
           ".validate": "!data.exists() || (newData.child('from').val() === data.child('from').val() && newData.child('to').val() === data.child('to').val() && newData.child('at').val() === data.child('at').val())"
         }
       }
+    },
+
+    "locationKeys": {
+      "$pid": {
+        ".read": "auth != null && root.child('meta/uids').child(auth.uid).val() === $pid",
+        ".write": "auth != null && (root.child('meta/uids').child(auth.uid).val() === $pid || (!newData.exists() && root.child('meta/admins').child(auth.uid).val() === true))",
+        ".validate": "newData.isString() && newData.val().length >= 20"
+      }
+    },
+
+    "locations": {
+      "$pid": {
+        ".write": "(newData.exists() && root.child('locationKeys').child($pid).exists() && newData.child('k').val() === root.child('locationKeys').child($pid).val()) || (auth != null && !newData.exists() && (root.child('meta/uids').child(auth.uid).val() === $pid || root.child('meta/admins').child(auth.uid).val() === true))",
+        ".validate": "root.child('meta/players').child($pid).exists() && newData.hasChildren(['k', 'pos'])",
+        "k": { ".validate": "newData.isString()" },
+        "pos": {
+          ".read": "auth != null && root.child('meta/uids').child(auth.uid).exists()",
+          ".validate": "newData.hasChildren(['lat', 'lng', 'at'])",
+          "lat": { ".validate": "newData.isNumber() && newData.val() >= -90 && newData.val() <= 90" },
+          "lng": { ".validate": "newData.isNumber() && newData.val() >= -180 && newData.val() <= 180" },
+          "at": { ".validate": "newData.isNumber()" },
+          "src": { ".validate": "newData.isString() && newData.val().length <= 40" },
+          "$other": { ".validate": false }
+        },
+        "$other": { ".validate": false }
+      }
     }
   }
 }

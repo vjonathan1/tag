@@ -17,6 +17,9 @@
 // ─────────────────────────────────────────────────────────────
 import { PLAYERS, RESPONSE_TIMEOUT_MIN, isConfigured } from "./config.js";
 
+// Shown in the footer so you can check which version a device is running.
+// Keep in sync with the ?v= numbers in index.html.
+const APP_VERSION = 7;
 const DEMO = new URLSearchParams(location.search).has("demo");
 const LS = DEMO ? "tagops-demo-" : "tagops-";
 const TIMEOUT = RESPONSE_TIMEOUT_MIN * 60_000;
@@ -32,6 +35,9 @@ const S = {
   backend: null, creds: {}, user: null, me: null, meta: null, game: null,
   subs: [], screen: "loading", message: "", busy: false, confirm: null,
   dismissed: new Set(), alerted: new Set(), escalating: new Set(), primed: false, modalKey: null,
+  // Location sharing
+  locs: {}, locSub: false, locModal: false, locKey: undefined, locMsg: "", locBusy: false,
+  map: null, mapEl: null, markers: {}, fitted: false, leaflet: null,
 };
 
 // ── Small utilities ──────────────────────────────────────────
@@ -199,6 +205,7 @@ function unsubscribeAll() { S.subs.forEach((u) => { try { u(); } catch {} }); S.
 function onAuth(user) {
   unsubscribeAll();
   S.user = user; S.meta = null; S.game = null; S.me = null; S.primed = false;
+  S.locs = {}; S.locSub = false; S.locModal = false; S.fitted = false;
   if (!user) return show("login");
   if (user.agent) { S.creds.agent = user.agent; store.set("agent", user.agent); }
   show("loading");
@@ -211,6 +218,10 @@ function onAuth(user) {
     S.me = meta?.uids?.[user.uid] || null;
     if (!meta) return show("error", "The operation hasn't been initialized yet. Ask your admin to run setup.html.");
     if (!S.me) return show("error", "This login no longer has access. If an admin reset your password, sign out and sign in with the new one.");
+    if (!S.locSub) {
+      S.locSub = true;
+      S.subs.push(S.backend.watchLocations(playerIds(), (id, pos) => { S.locs[id] = pos; updateMap(); }));
+    }
     if (S.game) show("main");
   }, denied));
   S.subs.push(S.backend.watchGame((game) => {
@@ -398,12 +409,19 @@ function renderMain() {
           <p class="lb-note">Includes every stint as IT. The live stint keeps counting.</p>
         </section>
       </div>
+      <section class="card map-card">
+        <div class="card-head"><h2>Field map</h2><span class="mono dim">Hourly check-ins</span></div>
+        <div id="map-slot" class="map-slot"></div>
+        <ul class="list loc-list" id="loc-list">${locListHTML(d)}</ul>
+        <p class="lb-note">Only players who turned on <b>Location sharing</b> appear. Each shows their latest check-in only.</p>
+      </section>
       ${isAdmin() ? adminHTML(d, p) : ""}
       <footer class="foot">
-        <span>TAG//OPS · ${playerIds().length} agents · ${d.log.length} confirmed tags</span>
+        <span>TAG//OPS v${APP_VERSION} · ${playerIds().length} agents · ${d.log.length} confirmed tags</span>
         <span class="foot-actions">
           ${"Notification" in window && Notification.permission === "default"
             ? '<button class="btn-link" data-act="alerts">Enable alerts</button>' : ""}
+          <button class="btn-link" data-act="loc-open">Location sharing</button>
           <button class="btn-link" data-act="change-pw">Change password</button>
           <button class="btn-link" data-act="disconnect">Sign out</button>
         </span>
@@ -416,6 +434,152 @@ function renderMain() {
     $nf.pw.value = keep.pw;
     if (keep.open !== undefined) document.getElementById("admin-console").open = keep.open;
   }
+  mountMap();
+}
+
+// ── Field map (Leaflet, loaded on demand) ───────────────────
+const STALE_MS = 3 * 3600e3; // check-ins older than this are dimmed
+const LEAFLET = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/";
+
+function loadLeaflet() {
+  if (S.leaflet) return S.leaflet;
+  S.leaflet = new Promise((resolve, reject) => {
+    const css = Object.assign(document.createElement("link"), { rel: "stylesheet", href: LEAFLET + "leaflet.min.css" });
+    const js = Object.assign(document.createElement("script"), { src: LEAFLET + "leaflet.min.js" });
+    js.onload = () => resolve(window.L);
+    js.onerror = () => { S.leaflet = null; reject(new Error("Leaflet failed to load")); };
+    document.head.append(css, js);
+  });
+  return S.leaflet;
+}
+
+function mountMap() {
+  const slot = document.getElementById("map-slot");
+  if (!slot) return;
+  // The map element is created once and moved into each re-render, so Leaflet keeps its state.
+  if (!S.mapEl) { S.mapEl = document.createElement("div"); S.mapEl.className = "map"; }
+  slot.appendChild(S.mapEl);
+  if (S.map) { S.map.invalidateSize(); return; }
+  loadLeaflet().then((L) => {
+    if (S.map) return;
+    S.map = L.map(S.mapEl, { zoomControl: true, attributionControl: true, worldCopyJump: true }).setView([39.5, -98.35], 4);
+    // Standard OpenStreetMap tiles (free, no key; darkened with CSS to match the theme).
+    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19,
+      // The page sets no-referrer for privacy; OSM's tile policy requires the site origin.
+      referrerPolicy: "strict-origin-when-cross-origin",
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+    }).addTo(S.map);
+    updateMap();
+  }).catch(() => {
+    S.mapEl.innerHTML = '<p class="map-msg">Map couldn\'t load (offline?). The check-in list below still works.</p>';
+  });
+}
+
+function locListHTML(d) {
+  const it = d?.it;
+  return playerIds().map((id) => {
+    const p = S.locs[id];
+    const stale = p && now() - p.at > STALE_MS;
+    return `
+      <li class="loc-row ${p ? "" : "off"} ${stale ? "stale" : ""}">
+        <span class="avatar sm ${id === it ? "hot" : ""}">${esc(initials(id))}</span>
+        <span class="loc-name">${esc(name(id))}${id === S.me ? " <i>You</i>" : ""}</span>
+        <span class="loc-time mono">${p ? `<span data-ago="${p.at}">${ago(p.at)}</span>` : "Not sharing"}</span>
+        ${p ? `<button class="btn btn-sm" data-act="locate" data-id="${esc(id)}">Locate</button>` : ""}
+      </li>`;
+  }).join("");
+}
+
+function updateMap() {
+  if (S.screen !== "main" || !S.game?.start) return;
+  const d = derive(S.game);
+  const list = document.getElementById("loc-list");
+  if (list) list.innerHTML = locListHTML(d);
+  const L = window.L;
+  if (!S.map || !L) return;
+  const pts = [];
+  for (const id of playerIds()) {
+    const p = S.locs[id];
+    if (!p) { if (S.markers[id]) { S.markers[id].remove(); delete S.markers[id]; } continue; }
+    const cls = `pin ${id === d.it ? "it" : ""} ${now() - p.at > STALE_MS ? "stale" : ""}`;
+    const icon = L.divIcon({ className: "", html: `<div class="${cls}">${esc(initials(id))}</div>`, iconSize: [34, 34], iconAnchor: [17, 17] });
+    const tip = `${esc(name(id))}${id === d.it ? " · IT" : ""} · ${ago(p.at)}`;
+    if (S.markers[id]) S.markers[id].setLatLng([p.lat, p.lng]).setIcon(icon).setTooltipContent(tip);
+    else S.markers[id] = L.marker([p.lat, p.lng], { icon }).bindTooltip(tip, { direction: "top", offset: [0, -16] }).addTo(S.map);
+    pts.push([p.lat, p.lng]);
+  }
+  if (!S.fitted && pts.length) {
+    S.fitted = true;
+    S.map.fitBounds(pts, { padding: [40, 40], maxZoom: 14 });
+  }
+}
+
+// ── Location sharing setup ───────────────────────────────────
+function randomKey() {
+  const bytes = crypto.getRandomValues(new Uint8Array(18));
+  return btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+const pingBody = (key, src = "ios-shortcut") =>
+  `{"k":"${key}","pos":{"lat":LAT,"lng":LNG,"at":{".sv":"timestamp"},"src":"${src}"}}`;
+
+async function openLocModal() {
+  S.locModal = true; S.locKey = undefined; S.locMsg = "";
+  renderModal();
+  try { S.locKey = (await S.backend.getLocationKey(S.me)) || null; }
+  catch (e) { console.error(e); S.locKey = null; S.locMsg = "Couldn't check your sharing status. Did you publish the latest database rules?"; }
+  renderModal();
+}
+
+async function locAction(fn) {
+  if (S.locBusy) return;
+  S.locBusy = true;
+  try { await fn(); } catch (e) { console.error(e); S.locMsg = `✗ ${e.message || e.code}`; }
+  finally { S.locBusy = false; renderModal(); }
+}
+
+function testPing() {
+  if (!navigator.geolocation) { S.locMsg = "✗ This browser can't read your location."; renderModal(); return; }
+  S.locMsg = "Getting this device's location…"; renderModal();
+  navigator.geolocation.getCurrentPosition(
+    (pos) => locAction(async () => {
+      await S.backend.sendPing(S.me, S.locKey, +pos.coords.latitude.toFixed(5), +pos.coords.longitude.toFixed(5), "browser-test");
+      S.locMsg = "✓ Test check-in sent. You should appear on the Field map now. Your setup works; next, build the Shortcut.";
+    }),
+    (err) => { S.locMsg = `✗ Location unavailable (${err.message}). Allow location for this site and try again.`; renderModal(); },
+    { enableHighAccuracy: true, timeout: 15000 },
+  );
+}
+
+function locModalHTML() {
+  const msg = S.locMsg ? `<p class="loc-msg">${esc(S.locMsg)}</p>` : "";
+  if (S.locKey === undefined) return `<span class="eyebrow">Location sharing</span><h2>Checking…</h2><div class="loader" style="margin-top:16px"></div>`;
+  if (!S.locKey) {
+    return `<span class="eyebrow">Location sharing · Off</span>
+      <h2>Share your location with the squad?</h2>
+      <p>Your phone sends one check-in per hour from an automation you set up yourself. Only the 7 signed-in players can see it, and only your <b>latest</b> check-in is kept, with no history.</p>
+      <p style="margin-top:10px">You can stop anytime here, or by deleting the automation on your phone.</p>
+      ${msg}
+      <div class="actions"><button class="btn btn-ghost" data-act="loc-close">Not now</button>
+      <button class="btn btn-primary" data-act="loc-start">Turn on sharing</button></div>`;
+  }
+  const url = S.backend.pingEndpoint(S.me);
+  return `<span class="eyebrow">Location sharing · On</span>
+    <h2>Your check-in setup</h2>
+    <p>Put these into your Shortcut (iPhone/iPad) or automation app (Android). Keep the key private: anyone with it could post a fake location for you.</p>
+    <div class="codefield"><div class="codehead"><b>1 · URL</b> <span class="mono dim">Method: PUT</span><button class="btn btn-sm" data-act="copy" data-copy="url">Copy</button></div><code>${esc(url)}</code></div>
+    <div class="codefield"><div class="codehead"><b>2 · Request body</b><button class="btn btn-sm" data-act="copy" data-copy="body">Copy</button></div><code>${esc(pingBody(S.locKey))}</code>
+      <small>Replace <b>LAT</b> and <b>LNG</b> with the Latitude and Longitude variables from <i>Get Current Location</i>.</small></div>
+    ${msg}
+    <div class="actions">
+      <button class="btn btn-primary" data-act="loc-test">Test from this device</button>
+      <a class="btn" href="LOCATION-SHARING.md" target="_blank" rel="noopener">Setup guide</a>
+    </div>
+    <div class="actions" style="margin-top:8px">
+      <button class="btn btn-sm btn-ghost" data-act="loc-regen">New key</button>
+      <button class="btn btn-sm btn-ghost" data-act="loc-stop">Stop sharing</button>
+      <button class="btn btn-sm" data-act="loc-close">Close</button>
+    </div>`;
 }
 
 function adminHTML(d, p) {
@@ -567,6 +731,9 @@ function leaderboardHTML(d) {
 // ── Modals ───────────────────────────────────────────────────
 function modalSpec() {
   if (S.screen !== "main") return null;
+  if (S.locModal) {
+    return { key: `loc:${S.locKey === undefined ? "?" : S.locKey || "-"}:${S.locMsg}`, cls: "", html: locModalHTML() };
+  }
   if (S.pwModal) {
     return {
       key: "pw", cls: "",
@@ -694,6 +861,30 @@ document.addEventListener("click", (e) => {
     case "disconnect": disconnect(); break;
     case "change-pw": S.pwModal = true; renderModal(); break;
     case "close-pw": S.pwModal = false; renderModal(); break;
+    case "loc-open": openLocModal(); break;
+    case "loc-close": S.locModal = false; renderModal(); break;
+    case "loc-start":
+      locAction(async () => { const k = randomKey(); await S.backend.setLocationKey(S.me, k); S.locKey = k; S.locMsg = ""; });
+      break;
+    case "loc-regen":
+      if (!confirm("Make a new key? Your current Shortcut stops working until you paste in the new key.")) break;
+      locAction(async () => { const k = randomKey(); await S.backend.setLocationKey(S.me, k); S.locKey = k; S.locMsg = "New key created. Update the body in your Shortcut."; });
+      break;
+    case "loc-stop":
+      if (!confirm("Stop sharing? Your location is removed from the map right away, and your Shortcut's check-ins will be rejected. Also delete the automation on your phone.")) break;
+      locAction(async () => { await S.backend.stopSharing(S.me); S.locKey = null; S.locMsg = "Sharing is off and your location was removed."; });
+      break;
+    case "loc-test": testPing(); break;
+    case "copy": {
+      const txt = el.dataset.copy === "url" ? S.backend.pingEndpoint(S.me) : pingBody(S.locKey);
+      navigator.clipboard.writeText(txt).then(() => toast("Copied."), () => toast("Couldn't copy. Select the text manually."));
+      break;
+    }
+    case "locate": {
+      const p = S.locs[el.dataset.id];
+      if (p && S.map) { S.map.setView([p.lat, p.lng], 15); S.markers[el.dataset.id]?.openTooltip(); S.mapEl.scrollIntoView({ behavior: "smooth", block: "center" }); }
+      break;
+    }
     case "gen-pw": document.getElementById("reset-form").pw.value = genPassword(); break;
     case "copy-reset": {
       const r = S.lastReset;
@@ -725,7 +916,7 @@ document.addEventListener("submit", (e) => {
   if (e.target.id === "reset-form") { e.preventDefault(); adminReset(e.target); }
 });
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && (S.confirm || S.pwModal)) { S.confirm = null; S.pwModal = false; renderModal(); }
+  if (e.key === "Escape" && (S.confirm || S.pwModal || S.locModal)) { S.confirm = null; S.pwModal = false; S.locModal = false; renderModal(); }
 });
 
 // ── Clock tick: live timers, leaderboard, auto-escalation ───
@@ -753,7 +944,7 @@ async function boot() {
   if (!DEMO && !isConfigured()) return show("unconfigured");
   show("loading");
   try {
-    const mod = DEMO ? await import("./backend-demo.js") : await import("./backend-firebase.js");
+    const mod = DEMO ? await import(`./backend-demo.js?v=${APP_VERSION}`) : await import(`./backend-firebase.js?v=${APP_VERSION}`);
     S.backend = mod.createBackend();
   } catch (e) {
     console.error(e);
@@ -764,3 +955,8 @@ async function boot() {
   document.addEventListener("visibilitychange", () => { if (!document.hidden) tick(); });
 }
 boot();
+
+// Installable app support (see sw.js). Fails silently where service workers aren't available.
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("sw.js").catch((e) => console.warn("Service worker not registered:", e));
+}

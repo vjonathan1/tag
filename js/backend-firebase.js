@@ -6,7 +6,7 @@ import {
   EmailAuthProvider, reauthenticateWithCredential, updatePassword,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import {
-  getDatabase, ref, onValue, runTransaction, get, update,
+  getDatabase, ref, onValue, runTransaction, get, update, set,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
 
 // A player's login is `<loginId>@<EMAIL_DOMAIN>`. loginId starts as the player id ("eli").
@@ -70,5 +70,26 @@ export function createBackend() {
       return res.committed;
     },
     now() { return Date.now() + offset; },
+
+    // ── Location check-ins ──
+    // Each sharing player has a secret key at /locationKeys/<id> (readable only by them).
+    // Phones post to /locations/<id> over plain HTTPS with that key in the body, so a
+    // Shortcut / Android automation needs no Firebase login. Only `pos` is readable by the squad.
+    watchLocations(ids, cb) {
+      const offs = ids.map((id) => onValue(ref(db, `locations/${id}/pos`), (s) => cb(id, s.val()), () => cb(id, null)));
+      return () => offs.forEach((off) => off());
+    },
+    async getLocationKey(pid) { return (await get(ref(db, `locationKeys/${pid}`))).val(); },
+    setLocationKey(pid, key) { return set(ref(db, `locationKeys/${pid}`), key); },
+    stopSharing(pid) { return update(ref(db), { [`locationKeys/${pid}`]: null, [`locations/${pid}`]: null }); },
+    pingEndpoint(pid) { return `${firebaseConfig.databaseURL.replace(/\/+$/, "")}/locations/${pid}.json`; },
+    // Sends exactly what the Shortcut sends — used by the in-app "test from this device" button.
+    async sendPing(pid, key, lat, lng, src) {
+      const res = await fetch(this.pingEndpoint(pid), {
+        method: "PUT",
+        body: JSON.stringify({ k: key, pos: { lat, lng, at: { ".sv": "timestamp" }, src } }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status} ${await res.text()}`);
+    },
   };
 }
