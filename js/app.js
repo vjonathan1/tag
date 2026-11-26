@@ -19,7 +19,7 @@ import { PLAYERS, RESPONSE_TIMEOUT_MIN, isConfigured } from "./config.js";
 
 // Shown in the footer so you can check which version a device is running.
 // Keep in sync with the ?v= numbers in index.html.
-const APP_VERSION = 11;
+const APP_VERSION = 12;
 const DEMO = new URLSearchParams(location.search).has("demo");
 const LS = DEMO ? "tagops-demo-" : "tagops-";
 const TIMEOUT = RESPONSE_TIMEOUT_MIN * 60_000;
@@ -435,7 +435,7 @@ function renderMain() {
       ${mapEnabled() || isAdmin() ? `
       <section class="card map-card">
         <div class="card-head">
-          <h2>Field map${mapEnabled() ? "" : ' <span class="badge badge-audit" title="Turned off in the Command console. Players can\'t see the map and new check-ins are rejected.">Hidden from players</span>'}</h2>
+          <h2>Field map${mapEnabled() ? "" : ' <span class="badge badge-audit" title="Turned off in the Command console. Players can\'t see the map; check-ins are still recorded.">Hidden from players</span>'}</h2>
           <button class="btn btn-sm" data-act="fit-map">Fit all</button>
         </div>
         <div id="map-slot" class="map-slot"></div>
@@ -642,7 +642,9 @@ function testPing() {
   navigator.geolocation.getCurrentPosition(
     (pos) => locAction(async () => {
       await S.backend.sendPing(S.me, S.locKey, +pos.coords.latitude.toFixed(5), +pos.coords.longitude.toFixed(5), "browser-test");
-      S.locMsg = "✓ Test check-in sent. You should appear on the Field map now. Your setup works; next, build the Shortcut.";
+      S.locMsg = mapEnabled() || isAdmin()
+        ? "✓ Test check-in sent. You should appear on the Field map now. Your setup works; next, build the Shortcut."
+        : "✓ Test check-in sent and recorded. Your setup works; next, build the Shortcut. (The map is hidden right now, so you won't see it yet.)";
     }),
     (err) => { S.locMsg = `✗ Location unavailable (${err.message}). Allow location for this site and try again.`; renderModal(); },
     { enableHighAccuracy: true, timeout: 15000 },
@@ -650,7 +652,7 @@ function testPing() {
 }
 
 function locModalHTML() {
-  const msg = (mapEnabled() ? "" : '<p class="loc-msg">⚠ An admin has turned the Field map off. Check-ins are paused and will be rejected until it\'s back on.</p>')
+  const msg = (mapEnabled() ? "" : '<p class="loc-msg">An admin has hidden the Field map for now. Your check-ins are still recorded and will show again when it\'s back on.</p>')
     + (S.locMsg ? `<p class="loc-msg">${esc(S.locMsg)}</p>` : "");
   if (S.locKey === undefined) return `<span class="eyebrow">Location sharing</span><h2>Checking…</h2><div class="loader" style="margin-top:16px"></div>`;
   if (!S.locKey) {
@@ -732,7 +734,7 @@ function adminMapHTML() {
   return `
     <div class="admin-block" id="admin-map-block">
       <h3>Field map</h3>
-      <p>${on ? "<b>On</b>: visible to all players." : "<b>Off</b>: hidden for everyone, and new check-ins are rejected."}
+      <p>${on ? "<b>On</b>: visible to all players." : "<b>Off</b>: hidden from players (admins still see it). Check-ins are still recorded."}
         ${count} stored check-in${count === 1 ? "" : "s"}.</p>
       <div class="actions">
         <button class="btn btn-sm ${on ? "" : "btn-primary"}" data-act="admin-map">${on ? "Turn map off" : "Turn map on"}</button>
@@ -1090,7 +1092,7 @@ document.addEventListener("click", (e) => {
     case "fit-map": fitMap(); break;
     case "admin-map": {
       const turnOn = !mapEnabled();
-      if (!confirm(turnOn ? "Turn the Field map on for everyone?" : "Turn the Field map off? It disappears for everyone and new check-ins are rejected until you turn it back on.")) break;
+      if (!confirm(turnOn ? "Turn the Field map on for everyone?" : "Hide the Field map from players? Admins still see it, and check-ins keep coming in.")) break;
       S.backend.setSetting("mapEnabled", turnOn)
         .then(() => toast(turnOn ? "Field map is on." : "Field map is off."))
         .catch((err) => toast(`Couldn't change the setting (${err.code || err.message}).`));

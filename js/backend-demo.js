@@ -94,7 +94,6 @@ export function createBackend() {
     async stopSharing(pid) { delete L.keys[pid]; delete L.locs[pid]; saveLocs(); emitLocs(); },
     pingEndpoint(pid) { return `https://YOUR-PROJECT-default-rtdb.firebaseio.com/locations/${pid}.json`; },
     async sendPing(pid, key, lat, lng, src) {
-      if (meta.settings?.mapEnabled === false) throw new Error("HTTP 401 Permission denied (field map is off)");
       if (!key || L.keys[pid] !== key) throw new Error("HTTP 401 Permission denied (key mismatch)");
       L.locs[pid] = { lat, lng, at: Date.now(), src }; saveLocs(); emitLocs();
     },
