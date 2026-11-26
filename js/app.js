@@ -19,7 +19,7 @@ import { PLAYERS, RESPONSE_TIMEOUT_MIN, isConfigured } from "./config.js";
 
 // Shown in the footer so you can check which version a device is running.
 // Keep in sync with the ?v= numbers in index.html.
-const APP_VERSION = 10;
+const APP_VERSION = 11;
 const DEMO = new URLSearchParams(location.search).has("demo");
 const LS = DEMO ? "tagops-demo-" : "tagops-";
 const TIMEOUT = RESPONSE_TIMEOUT_MIN * 60_000;
@@ -432,9 +432,12 @@ function renderMain() {
           <p class="lb-note">Includes every stint as IT. The live stint keeps counting.</p>
         </section>
       </div>
-      ${mapEnabled() ? `
+      ${mapEnabled() || isAdmin() ? `
       <section class="card map-card">
-        <div class="card-head"><h2>Field map</h2><button class="btn btn-sm" data-act="fit-map">Fit all</button></div>
+        <div class="card-head">
+          <h2>Field map${mapEnabled() ? "" : ' <span class="badge badge-audit" title="Turned off in the Command console. Players can\'t see the map and new check-ins are rejected.">Hidden from players</span>'}</h2>
+          <button class="btn btn-sm" data-act="fit-map">Fit all</button>
+        </div>
         <div id="map-slot" class="map-slot"></div>
         <ul class="list loc-list" id="loc-list">${locListHTML(d)}</ul>
         <p class="lb-note map-legend">
@@ -514,16 +517,61 @@ function mountMap() {
   });
 }
 
+// ── "City, ST" labels via OpenStreetMap's Nominatim reverse geocoder ──
+// Coordinates are rounded to 2 decimals (~1 km) before lookup, since only the town is needed.
+// Results are cached on this device; requests are spaced ≥1 s apart per Nominatim's usage policy.
+const GEO_STORE = "tagops-geo";
+const geo = { cache: {}, failed: {}, queue: [], busy: false };
+try { geo.cache = JSON.parse(localStorage.getItem(GEO_STORE)) || {}; } catch {}
+const geoKey = (p) => `${p.lat.toFixed(2)},${p.lng.toFixed(2)}`;
+
+function placeFor(p) {
+  const k = geoKey(p);
+  if (k in geo.cache) return geo.cache[k];
+  const retryOk = !geo.failed[k] || Date.now() - geo.failed[k] > 10 * 60e3;
+  if (retryOk && !geo.queue.includes(k)) { geo.queue.push(k); pumpGeo(); }
+  return null;
+}
+async function pumpGeo() {
+  if (geo.busy) return;
+  geo.busy = true;
+  while (geo.queue.length) {
+    const k = geo.queue.shift();
+    const [lat, lng] = k.split(",");
+    try {
+      const res = await fetch(
+        `https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=10&addressdetails=1&accept-language=en&lat=${lat}&lon=${lng}`,
+        { referrerPolicy: "strict-origin-when-cross-origin" }, // Nominatim asks for the site origin
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const a = (await res.json()).address || {};
+      const city = a.city || a.town || a.village || a.hamlet || a.municipality || a.suburb || a.county || "";
+      const iso = a["ISO3166-2-lvl4"] || "";
+      const region = iso.startsWith("US-") ? iso.slice(3) : a.state || (a.country_code || "").toUpperCase();
+      geo.cache[k] = [city, region].filter(Boolean).join(", ");
+      try { localStorage.setItem(GEO_STORE, JSON.stringify(geo.cache)); } catch {}
+      updateMap();
+    } catch (e) {
+      geo.failed[k] = Date.now(); // offline or blocked: try again in 10 min, list still shows times
+    }
+    await new Promise((r) => setTimeout(r, 1100));
+  }
+  geo.busy = false;
+}
+
 function locListHTML(d) {
   const it = d?.it;
   return playerIds().map((id) => {
     const p = S.locs[id];
+    const place = p ? placeFor(p) : null;
     return `
       <li class="loc-row ${p ? freshness(p.at) : "off"}">
         <span class="avatar sm ${id === it ? "hot" : ""}">${esc(initials(id))}</span>
-        <span class="loc-name">${esc(name(id))}${id === S.me ? " <i>You</i>" : ""}</span>
+        <span class="loc-main">
+          <span class="loc-name">${esc(name(id))}${id === S.me ? " <i>You</i>" : ""}</span>
+          ${place ? `<small class="loc-place">${esc(place)}</small>` : ""}
+        </span>
         <span class="loc-time mono" ${p ? `title="Last check-in ${esc(fmtWhen(p.at))}"` : ""}>${p ? agoShort(p.at) : "Off"}</span>
-        ${p ? `<button class="btn btn-sm" data-act="locate" data-id="${esc(id)}">Locate</button>` : ""}
       </li>`;
   }).join("");
 }
@@ -543,7 +591,8 @@ function updateMap() {
     if (!p) { if (S.markers[id]) { S.markers[id].remove(); delete S.markers[id]; } continue; }
     const cls = `pin ${freshness(p.at)} ${id === d.it ? "it" : ""}`;
     const icon = L.divIcon({ className: "", html: `<div class="${cls}">${esc(initials(id))}</div>`, iconSize: [34, 34], iconAnchor: [17, 17] });
-    const tip = `${esc(name(id))}${id === d.it ? " · IT" : ""} · ${agoShort(p.at)}`;
+    const where = geo.cache[geoKey(p)];
+    const tip = `${esc(name(id))}${id === d.it ? " · IT" : ""}${where ? ` · ${esc(where)}` : ""} · ${agoShort(p.at)}`;
     if (S.markers[id]) S.markers[id].setLatLng([p.lat, p.lng]).setIcon(icon).setTooltipContent(tip);
     else S.markers[id] = L.marker([p.lat, p.lng], { icon }).bindTooltip(tip, { direction: "top", offset: [0, -16] }).addTo(S.map);
     pts.push([p.lat, p.lng]);
@@ -1053,11 +1102,6 @@ document.addEventListener("click", (e) => {
         .then(() => toast("All check-ins cleared."))
         .catch((err) => toast(`Couldn't clear check-ins (${err.code || err.message}).`));
       break;
-    case "locate": {
-      const p = S.locs[el.dataset.id];
-      if (p && S.map) { S.map.setView([p.lat, p.lng], 15); S.markers[el.dataset.id]?.openTooltip(); S.mapEl.scrollIntoView({ behavior: "smooth", block: "center" }); }
-      break;
-    }
     case "gen-pw": document.getElementById("reset-form").pw.value = genPassword(); break;
     case "copy-reset": {
       const r = S.lastReset;
