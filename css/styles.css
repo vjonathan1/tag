@@ -476,3 +476,10 @@ input[type="datetime-local"]::-webkit-calendar-picker-indicator { filter: invert
 /* ── Footer: nav links stay on one line on phones ── */
 .foot-actions { flex-wrap: nowrap; white-space: nowrap; gap: 16px; }
 @media (max-width: 420px) { .foot-actions { gap: 13px; } .foot .btn-link { font-size: 0.68rem; letter-spacing: 0.08em; } }
+
+/* ── Check-in list: name with "City, ST" underneath, age on the right ── */
+.loc-row { padding: 9px 0; }
+.loc-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.loc-main .loc-name { flex: none; }
+.loc-place { color: var(--dim); font-size: 0.78rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.map-card .card-head h2 .badge { margin-left: 8px; vertical-align: 2px; letter-spacing: 0.08em; }

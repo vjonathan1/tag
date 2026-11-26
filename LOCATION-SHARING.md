@@ -24,6 +24,7 @@ Both send the same single web request, so the game doesn't care which one a play
 - **Opt-in only.** Each player turns it on themselves in the app (footer → **Location sharing**) and builds the automation on their own phone. Nobody can turn it on for someone else, admins included.
 - **Only the latest point is stored.** Each check-in overwrites the previous one, so there's no location history.
 - **Only the 7 signed-in players can see it.** The secret key that sends check-ins is never shown to anyone except its owner.
+- **Outside services see approximate areas.** To draw the map and show "City, ST" under each name, each viewer's browser asks OpenStreetMap's servers for map images and place names. Place-name lookups send coordinates rounded to about 1 km, and results are cached on the device. No names or player info are sent.
 - **Stopping is instant.** **Stop sharing** in the app deletes your location and disables your key. Then delete the automation on your phone. An admin can also remove anyone's location.
 - Get everyone's agreement before using this. It's a precise location, and it updates while people are at home, school, or work.
 
