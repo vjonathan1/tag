@@ -62,7 +62,7 @@ Admins see a **Command console** panel at the bottom of the main screen. It's co
 |---|---|
 | **Reset a password** | Pick a player, type or generate a new password. They're signed out on every device and must sign in with the new one. **Copy message** gives you a ready-to-send note. |
 | **Pending tag** | **Force confirm** or **Void** a stuck pending tag or audit, skipping the normal accept/vote process. |
-| **Field map** | Turn the map on or off for everyone. While off, it's hidden and new check-ins are rejected. **Clear all check-ins** deletes everyone's stored location. |
+| **Field map** | Show or hide the map for players. While off, players can't see it, but admins still can and check-ins are still recorded. **Clear all check-ins** deletes everyone's stored location. |
 | **Log a past tag** | Add a tag that happened but wasn't entered: pick who tagged whom and when. It's checked against the history (the tagger must have been IT then), so log older tags first. Shown as "Logged by admin". **Game start** lets you change who was IT first and when, e.g. to backfill tags from before the app existed. |
 | **Undo last tag** | Removes the most recent confirmed tag. IT goes back to the previous person, and their timer continues from when they were originally tagged. Undone tags are kept in `game/undone` for the record. |
 
